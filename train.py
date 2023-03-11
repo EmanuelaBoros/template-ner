@@ -4,19 +4,40 @@ from seq2seq_model import Seq2SeqModel
 logging.basicConfig(level=logging.INFO)
 transformers_logger = logging.getLogger("transformers")
 transformers_logger.setLevel(logging.WARNING)
+import argparse
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--train_file",
+        type=str,
+    )
+    parser.add_argument(
+        "--dev_file",
+        type=str,
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+    )
 
 
-train_data = pd.read_csv("./conll2003/train.csv", sep=',').values.tolist()
-train_df = pd.DataFrame(train_data, columns=["input_text", "target_text"])
+    args, _ = parser.parse_known_args()
 
-eval_data = pd.read_csv("./conll2003/dev.csv", sep=',').values.tolist()
-eval_df = pd.DataFrame(eval_data, columns=["input_text", "target_text"])
+train_df = pd.read_csv(args.train_file)
+# train_df = pd.DataFrame(train_data, columns=["input_text", "target_text"])
+print(train_df.head())
+eval_df = pd.read_csv(args.dev_file)
+# eval_df = pd.DataFrame(eval_data, columns=["input_text", "target_text"])
+
 
 model_args = {
     "reprocess_input_data": True,
     "overwrite_output_dir": True,
     "max_seq_length": 50,
-    "train_batch_size": 100,
+    "train_batch_size": 16,
     "num_train_epochs": 20,
     "save_eval_checkpoints": False,
     "save_model_every_epoch": False,
@@ -29,16 +50,17 @@ model_args = {
     "save_steps": 11898,
     "gradient_accumulation_steps": 1,
     "output_dir": "./exp/template",
+    "n_gpu": 2
 }
+
 
 # Initialize model
 model = Seq2SeqModel(
-    encoder_decoder_type="bart",
-    encoder_decoder_name="facebook/bart-large",
+    encoder_decoder_type="mbart",
+    encoder_decoder_name="facebook/mbart-large-50",
     args=model_args,
     # use_cuda=False,
 )
-
 
 
 # Train the model

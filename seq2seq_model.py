@@ -7,7 +7,7 @@ import warnings
 from dataclasses import asdict
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
-
+from torch import nn
 import numpy as np
 import pandas as pd
 import torch
@@ -16,8 +16,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm, trange
+from torch.optim import AdamW
 from transformers import (
-    AdamW,
     AutoConfig,
     AutoModel,
     AutoTokenizer,
@@ -40,6 +40,9 @@ from transformers import (
     RobertaModel,
     RobertaTokenizer,
     get_linear_schedule_with_warmup,
+    MBartForConditionalGeneration,
+    MBartConfig,
+    MBartTokenizer
 )
 
 from simpletransformers.config.global_args import global_args
@@ -59,6 +62,7 @@ logger = logging.getLogger(__name__)
 MODEL_CLASSES = {
     "auto": (AutoConfig, AutoModel, AutoTokenizer),
     "bart": (BartConfig, BartForConditionalGeneration, BartTokenizer),
+    "mbart": (MBartConfig, MBartForConditionalGeneration, MBartTokenizer),
     "bert": (BertConfig, BertModel, BertTokenizer),
     "roberta": (RobertaConfig, RobertaModel, RobertaTokenizer),
     # "blender": (BlenderbotSmallConfig, BlenderbotSmallForConditionalGeneration, BlenderbotSmallTokenizer),
@@ -153,13 +157,15 @@ class Seq2SeqModel:
 
         # config = EncoderDecoderConfig.from_encoder_decoder_configs(config, config)
         if encoder_decoder_type:
-            config_class, model_class, tokenizer_class = MODEL_CLASSES[encoder_decoder_type]
+            config_class, model_class, _ = MODEL_CLASSES[encoder_decoder_type]
         else:
-            config_class, model_class, tokenizer_class = MODEL_CLASSES[encoder_type]
+            config_class, model_class, _ = MODEL_CLASSES[encoder_type]
 
-        if encoder_decoder_type in ["bart", "marian", "blender", "blender-large"]:
+        tokenizer_class = AutoTokenizer
+
+        if encoder_decoder_type in ["bart", "marian", "blender", "blender-large", "mbart"]:
             self.model = model_class.from_pretrained(encoder_decoder_name)
-            if encoder_decoder_type in ["bart", "blender", "blender-large"]:
+            if encoder_decoder_type in ["bart", "blender", "blender-large", "mbart"]:
                 self.encoder_tokenizer = tokenizer_class.from_pretrained(encoder_decoder_name)
                 # self.encoder_tokenizer = tokenizer_class.from_pretrained(encoder_decoder_name, additional_special_tokens=['__defi__', '__sim__'])
                 # self.model.resize_token_embeddings(len(self.encoder_tokenizer))
@@ -170,24 +176,25 @@ class Seq2SeqModel:
                     self.encoder_tokenizer = tokenizer_class.from_pretrained(encoder_decoder_name)
             self.decoder_tokenizer = self.encoder_tokenizer
             self.config = self.model.config
-        else:
-            if encoder_decoder_name:
-                # self.model = EncoderDecoderModel.from_pretrained(encoder_decoder_name)
-                self.model = EncoderDecoderModel.from_encoder_decoder_pretrained(
-                    os.path.join(encoder_decoder_name, "encoder"), os.path.join(encoder_decoder_name, "decoder")
-                )
-                self.model.encoder = model_class.from_pretrained(os.path.join(encoder_decoder_name, "encoder"))
-                self.model.decoder = BertForMaskedLM.from_pretrained(os.path.join(encoder_decoder_name, "decoder"))
-                self.encoder_tokenizer = tokenizer_class.from_pretrained(os.path.join(encoder_decoder_name, "encoder"))
-                self.decoder_tokenizer = BertTokenizer.from_pretrained(os.path.join(encoder_decoder_name, "decoder"))
-            else:
-                self.model = EncoderDecoderModel.from_encoder_decoder_pretrained(
-                    encoder_name, decoder_name, config=config
-                )
-                self.encoder_tokenizer = tokenizer_class.from_pretrained(encoder_name)
-                self.decoder_tokenizer = BertTokenizer.from_pretrained(decoder_name)
-            self.encoder_config = self.model.config.encoder
-            self.decoder_config = self.model.config.decoder
+
+        # else:
+        #     if encoder_decoder_name:
+        #         # self.model = EncoderDecoderModel.from_pretrained(encoder_decoder_name)
+        #         self.model = EncoderDecoderModel.from_encoder_decoder_pretrained(
+        #             os.path.join(encoder_decoder_name, "encoder"), os.path.join(encoder_decoder_name, "decoder")
+        #         )
+        #         self.model.encoder = model_class.from_pretrained(os.path.join(encoder_decoder_name, "encoder"))
+        #         self.model.decoder = BertForMaskedLM.from_pretrained(os.path.join(encoder_decoder_name, "decoder"))
+        #         self.encoder_tokenizer = tokenizer_class.from_pretrained(os.path.join(encoder_decoder_name, "encoder"))
+        #         self.decoder_tokenizer = BertTokenizer.from_pretrained(os.path.join(encoder_decoder_name, "decoder"))
+        #     else:
+        #         self.model = EncoderDecoderModel.from_encoder_decoder_pretrained(
+        #             encoder_name, decoder_name, config=config
+        #         )
+        #         self.encoder_tokenizer = tokenizer_class.from_pretrained(encoder_name)
+        #         self.decoder_tokenizer = BertTokenizer.from_pretrained(decoder_name)
+        #     self.encoder_config = self.model.config.encoder
+        #     self.decoder_config = self.model.config.decoder
 
         if self.args.wandb_project and not wandb_available:
             warnings.warn("wandb_project specified but wandb is not available. Wandb disabled.")
@@ -399,7 +406,7 @@ class Seq2SeqModel:
 
         if args.model_name and os.path.exists(args.model_name):
             try:
-                # set global_step to gobal_step of last saved checkpoint from model path
+                # set global_step to global_step of last saved checkpoint from model path
                 checkpoint_suffix = args.model_name.split("/")[-1].split("-")
                 if len(checkpoint_suffix) > 2:
                     checkpoint_suffix = checkpoint_suffix[1]
@@ -825,7 +832,7 @@ class Seq2SeqModel:
                 )["input_ids"]
             input_ids = input_ids.to(self.device)
 
-            if self.args.model_type in ["bart", "marian", "blender", "blender-large"]:
+            if self.args.model_type in ["bart", "marian", "blender", "blender-large", "mbart"]:
 
                 outputs = self.model.generate(
                     input_ids=input_ids,
@@ -912,7 +919,7 @@ class Seq2SeqModel:
                 )["input_ids"]
             input_ids = input_ids.to(self.device)
 
-            if self.args.model_type in ["bart", "marian", "blender", "blender-large"]:
+            if self.args.model_type in ["bart", "marian", "blender", "blender-large", "mbart"]:
                 outputs = self.model.generate(
                     input_ids=input_ids,
                     num_beams=self.args.num_beams,
@@ -1032,7 +1039,7 @@ class Seq2SeqModel:
             CustomDataset = args.dataset_class
             return CustomDataset(encoder_tokenizer, decoder_tokenizer, args, data, mode)
         else:
-            if args.model_type in ["bart", "marian", "blender", "blender-large"]:
+            if args.model_type in ["bart", "marian", "blender", "blender-large", "mbart"]:
                 return SimpleSummarizationDataset(encoder_tokenizer, self.args, data, mode)
             else:
                 return Seq2SeqDataset(encoder_tokenizer, decoder_tokenizer, self.args, data, mode,)
@@ -1064,7 +1071,7 @@ class Seq2SeqModel:
             model_to_save = model.module if hasattr(model, "module") else model
             self._save_model_args(output_dir)
 
-            if self.args.model_type in ["bart", "marian", "blender", "blender-large"]:
+            if self.args.model_type in ["bart", "marian", "blender", "blender-large", "mbart"]:
                 os.makedirs(os.path.join(output_dir), exist_ok=True)
                 model_to_save.save_pretrained(output_dir)
                 self.config.save_pretrained(output_dir)
@@ -1119,7 +1126,7 @@ class Seq2SeqModel:
                 "decoder_input_ids": y_ids.to(device),
                 "lm_labels": lm_labels.to(device),
             }
-        elif self.args.model_type in ["blender", "bart", "blender-large"]:
+        elif self.args.model_type in ["blender", "bart", "blender-large", "mbart"]:
             pad_token_id = self.encoder_tokenizer.pad_token_id
             source_ids, source_mask, y = batch["source_ids"], batch["source_mask"], batch["target_ids"]
             y_ids = y[:, :-1].contiguous()
