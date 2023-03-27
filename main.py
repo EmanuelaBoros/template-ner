@@ -22,18 +22,21 @@ def get_item(tokens, entity_tags, link_tags):
     item = {"input_text": ' '.join(tokens)}
     # [('R . Ellis', 'pers', 'Q7344037', [12, 13, 14])
     pos_qid, pos_ner = {}, {}
+    target_tokens = []
     for entity in entities:
 
         positions = entity[-1]
         entity_type = entity[1]
         entity_text = entity[0]
-        if len(positions) == 1:
-            tokens[positions[0]] = "[" + entity_type + "] " + entity_text + " [/" + entity_type + "]"
-        else:
-            tokens[positions[0]] = "[" + entity_type + "] " + tokens[positions[0]]
-            tokens[positions[-1]] = tokens[positions[-1]] + " [/" + entity_type + "]"
+        target_tokens.append(entity_text + " [" + entity_type + "]")
 
-    item["target_text"] = ' '.join(tokens)
+        # if len(positions) == 1:
+        #     tokens[positions[0]] = "[" + entity_type + "] " + entity_text + " [/" + entity_type + "]"
+        # else:
+        #     tokens[positions[0]] = "[" + entity_type + "] " + tokens[positions[0]]
+        #     tokens[positions[-1]] = tokens[positions[-1]] + " [/" + entity_type + "]"
+
+    item["target_text"] = ' '.join(target_tokens)
     return item
 
 
